@@ -1,0 +1,241 @@
+
+---
+title: "Small extreme bandits problem with known configuration"
+output:
+  pdf_document: default
+  html_document:
+    highlight: pygments
+    theme: spacelab
+---
+
+```{r setup, echo =FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.pos = 'h', fig.align = 'center')
+knitr::opts_chunk$set(fig.cap = "",  fig.path = "Plot")
+library(coda)
+library(evd)
+library(coda)
+```
+
+* * *
+### Problem setup
+
+Settings 
+- K = 2 arms (k= 1, 2)
+- D = 3 sources (d = 1, 2, 3)
+- arm k=1 connects to source d = 1, 2 ($a_{11} = 1, a_{12} = 1, a_{13} = 0$)
+- arm k=2 connects to source d = 2, 3 ($a_{21} = 0, a_{22} = 1, a_{23} = 1$)
+- shape parameter of the three arms are $\alpha_1 = 1, \alpha_2 = 5, \alpha_3 = 10$
+
+```{r}
+set.seed(1)
+# parameter setup
+K = 2
+D = 3
+A = matrix(c(1,1,0,0,1,1),nrow = K, ncol = D,byrow = TRUE)
+alpha_truth = c(1,5,10)
+```
+
+
+Calculate the likelihood from the history (not vectorized)
+```{r}
+arm_hist = c(1,2,1,2) # keep history of what arms were played 
+Y_hist = c(3,4,5,6) # keep history of rewards
+
+# evaluate likelihood at alpha_current
+alpha_current = alpha_truth # current value of shape parameter in the chain
+alpha_d = alpha_current
+likelihood = 1
+for (step in 1:length(arm_hist)) {
+  It = arm_hist[step] # the arm played at that step
+  yt = Y_hist[step] # the reward at that step
+  a_Itd = A[It,] # the connection at that step
+  polynomial_terms = sum(a_Itd*alpha_d*yt^(-alpha_d-1))
+  exponential_terms = exp(-sum(a_Itd*yt^(-alpha_d)))
+  likelihood = likelihood*polynomial_terms*exponential_terms
+}
+likelihood
+```
+
+Calculate the likelihood from the history (vectorized)
+```{r}
+arm_hist = c(1,2,1,2) # keep history of what arms were played
+Y_hist = c(3,4,5,6) # keep history of rewards
+
+# evaluate likelihood at alpha_current
+alpha_current = alpha_truth # current value of shape parameter in the chain
+It = arm_hist # a vector of size #times
+yt = matrix(Y_hist, nrow = length(arm_hist), ncol = D, byrow = FALSE) # a matrix of size #times x #sources
+a_Itd = A[It,] # a matrix of size #times x #sources
+alpha_d = matrix(alpha_current, nrow = length(arm_hist), ncol = D, byrow = TRUE)
+polynomial_terms = rowSums(a_Itd*alpha_d*yt^(-alpha_d-1)) # a vector of size #times
+exponential_terms = exp(-rowSums(a_Itd*yt^(-alpha_d))) # a vector of size #times
+likelihood = prod(polynomial_terms*exponential_terms)
+likelihood
+```
+
+```{r}
+compute_likelihood <- function(arm_hist, Y_hist, alpha, A){
+  # Compute the likelihood of given alpha and structure A
+  # arm_hist: a vector of length #times indicating which arms were played in history
+  # Y_hist: a vector of length #times recording the rewards we received from playing arm_hist
+  # alpha: a vector of length D #sources indicating the shape parameters of sources at which the likelihood will be evaluated
+  # A: a matrix of size #arms x #sources indicating the current configuration of the problem
+  # return: likelihood
+  
+  It = arm_hist # a vector of size #times
+  yt = matrix(Y_hist, nrow = length(arm_hist), ncol = D, byrow = FALSE) # a matrix of size #times x #sources
+  a_Itd = A[It,] # a matrix of size #times x #sources
+  alpha_d = matrix(alpha, nrow = length(arm_hist), ncol = D, byrow = TRUE)
+  polynomial_terms = rowSums(a_Itd*alpha_d*yt^(-alpha_d-1)) # a vector of size #times
+  exponential_terms = exp(-rowSums(a_Itd*yt^(-alpha_d))) # a vector of size #times
+  likelihood = prod(polynomial_terms*exponential_terms)
+  return(likelihood)
+}
+```
+
+```{r}
+compute_likelihood(arm_hist, Y_hist, alpha_current, A)
+```
+
+compute acceptance ratio for metropolis-hasting algo
+
+update alpha_current to alpha_new or not
+The proposal distribution is gamma(alpha*tuning, tuning)
+```{r}
+# suppose we want to sample alpha of source 1
+alpha_current = c(2,5,10)
+alpha_new = c(1,5,10) # propose new value for source 1 shape parameter
+a = 1 # prior parameters of alpha Gamma(a,b)
+b = 1 # prior parameters of alpha Gamma(a,b)
+d = 1 # index of the source that we are going to update the shape parameter
+tuning = 0.5 # tuning parameter of the proposal distribution - control variance around the current iteration
+
+# extract the shape parameter of the souce we want to update
+alpha_current_d = alpha_current[d]
+alpha_new_d = alpha_new[d]
+likelihood_alpha_current = compute_likelihood(arm_hist, Y_hist, alpha_current, A) #likelihood at alpha_current
+likelihood_alpha_new = compute_likelihood(arm_hist, Y_hist, alpha_new, A) #likelihood at alpha_new
+prior_alpha_current = (alpha_current_d^(a-1))*exp(-b*alpha_current_d) #prior at alpha_current
+prior_alpha_new = (alpha_new_d^(a-1))*exp(-b*alpha_new_d) #prior at alpha_new
+sample_alpha_current = dgamma(alpha_current_d, shape = alpha_new_d*tuning, rate = tuning)  # g(alpha_current_d|alpha_new_d) Gamma(alpha_new_d*tuning,tuning)
+sample_alpha_new = dgamma(alpha_new_d, shape = alpha_current_d*tuning, rate = tuning) # g(alpha_new_d|alpha_current_d) Gamma(alpha_current_d*tuning,tuning)
+
+r = (likelihood_alpha_new*prior_alpha_new*sample_alpha_current)/
+  (likelihood_alpha_current*prior_alpha_current*sample_alpha_new)
+```
+
+```{r}
+compute_acceptance_ratio <- function(arm_hist, Y_hist, alpha_current, alpha_new, d, A){
+  # Compute the acceptance ratio of the proposed dth shape parameter in alpha_new with the current value in alpha_current under Metropolis-Hasting method
+  # arm_hist: a vector of length #times indicating which arms were played in history
+  # Y_hist: a vector of length #times recording the rewards we received from playing arm_hist
+  # alpha_current: a vector of length D #sources indicating the current shape parameters of sources
+  # alpha_new: a vector of length D #sources indicating the new shape parameters of sources
+  # d: the index of the source that we are going to update
+  # A: a matrix of size #arms x #sources indicating the current configuration of the problem
+  # return: r: acceptance ratio for the newly proposed shape parameter of source #d
+  
+  a = 1 # prior parameters of alpha Gamma(a,b)
+  b = 1 # prior parameters of alpha Gamma(a,b)
+  
+  # extract the shape parameter of the souce we want to update
+  alpha_current_d = alpha_current[d]
+  alpha_new_d = alpha_new[d]
+  
+  # compute the pdf of all parts in acceptance ratio formula for Metropolis-Hasting algo
+  likelihood_alpha_current = compute_likelihood(arm_hist, Y_hist, alpha_current, A) #likelihood at alpha_current
+  likelihood_alpha_new = compute_likelihood(arm_hist, Y_hist, alpha_new, A) #likelihood at alpha_new
+  prior_alpha_current = (alpha_current_d^(a-1))*exp(-b*alpha_current_d) #prior at alpha_current
+  prior_alpha_new = (alpha_new_d^(a-1))*exp(-b*alpha_new_d) #prior at alpha_new
+  # g(alpha_current_d|alpha_new_d) Gamma(alpha_new_d*tuning,tuning)
+  sample_alpha_current = dgamma(alpha_current_d, shape = alpha_new_d*tuning, rate = tuning)  
+  # g(alpha_new_d|alpha_current_d) Gamma(alpha_current_d*tuning,tuning)
+  sample_alpha_new = dgamma(alpha_new_d, shape = alpha_current_d*tuning, rate = tuning) 
+
+  # compute acceptance ratio
+  r = (likelihood_alpha_new*prior_alpha_new*sample_alpha_current)/
+  (likelihood_alpha_current*prior_alpha_current*sample_alpha_new)
+  return(r)
+}
+```
+
+```{r}
+compute_acceptance_ratio(arm_hist, Y_hist, alpha_current, alpha_new, d, A)
+```
+
+```{r}
+mean(rfrechet(10000,shape = alpha[2]))
+```
+
+
+Try to infer alpha based on samples
+
+Experiment 1: try arm 1 10 times and arm 2 10 times
+```{r}
+# play 1st arm 10 times and then 2nd arm 10 times
+arm_hist = c(rep(1,10), rep(2,10))
+Y_hist = rep(0, length(arm_hist))
+# simulate data
+for (step in 1:length(arm_hist)) {
+  It = arm_hist[step] # arm that was played at that step
+  active_source = (A[It,])*(1:D) # which sources are active
+  Y_hist[step] = max(rfrechet(sum(A[It,]),shape = alpha_truth[active_source]))
+}
+```
+
+```{r}
+# start the chain with alpha = c(2,4,6)
+alpha_current = c(2,4,6)
+tuning = 0.5 # tuning parameter of the proposal distribution
+burnin = 1000
+size = 10000 # total number of posterior samples before thining
+thining = 5
+ALPHA = matrix(0, nrow = size, ncol = D) # matrix to save samples from posterior distribution
+count = 0
+accept = 0
+for (t in 1:(burnin+size)) {
+  for (d in 1:D) {
+    alpha_current_d = alpha_current[d]
+    # propose new values using proposal distribution Gamma(alpha_current_d*tuning,tuning)
+    alpha_new_d = rgamma(1, shape = alpha_current_d*tuning, rate = tuning)
+    alpha_new = alpha_current
+    alpha_new[d] = alpha_new_d
+    
+    # compute acceptance ratio
+    r = compute_acceptance_ratio(arm_hist, Y_hist, alpha_current, alpha_new, d, A)
+    u = runif(1,0,1)
+    count = count + 1
+    if (u<r) {
+      # accept proposed value
+      alpha_current = alpha_new
+      accept = accept + 1
+    }
+  }
+  
+  if (t>burnin) {
+    # past burnin period already - save output
+    ALPHA[t-burnin,] = alpha_current
+  }
+}
+ALPHA = ALPHA[seq(1, size, thining),]
+print(accept/count)
+```
+
+```{r}
+ALPHA.mcmc <- mcmc(ALPHA, start = 1)
+summary(ALPHA.mcmc)
+plot(ALPHA.mcmc)
+autocorr.plot(ALPHA.mcmc)
+```
+
+To do list
+- Check current code for r (done)
+- implement r as a function (done)
+- try simple simulation plan (done)
+- check tuning parameter for Metropolis
+- change likelihood to log likelihood
+- simulate (Thursday)
+* * *
+
+
+
