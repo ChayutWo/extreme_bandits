@@ -70,8 +70,8 @@ compute_acceptance_ratio <- function(arm_hist, Y_hist, alpha_current, alpha_new,
   # A: a matrix of size #arms x #sources indicating the current configuration of the problem
   # return: r: acceptance ratio for the newly proposed shape parameter of source #d
   
-  a = 1 # prior parameters of alpha Gamma(a,b)
-  b = 1 # prior parameters of alpha Gamma(a,b)
+  a = 0.25 # prior parameters of alpha Gamma(a,b)
+  b = 0.25 # prior parameters of alpha Gamma(a,b)
   
   # extract the shape parameter of the souce we want to update
   alpha_current_d = alpha_current[d]
